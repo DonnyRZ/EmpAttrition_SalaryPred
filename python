@@ -1,0 +1,547 @@
+from google.colab import files
+uploaded = files.upload()
+
+!pip install scipy
+
+import io
+import pandas as pd
+import numpy as np
+import matplotlib.pyplot as plt
+import seaborn as sns
+import scipy.stats as stats
+from IPython.display import display
+
+from sklearn.pipeline import Pipeline
+from sklearn.compose import ColumnTransformer
+from sklearn.impute import SimpleImputer
+from sklearn.preprocessing import StandardScaler, OneHotEncoder, PolynomialFeatures
+
+from sklearn.linear_model import LogisticRegression, LinearRegression
+from sklearn.tree import DecisionTreeClassifier
+from xgboost import XGBClassifier, XGBRegressor
+
+from sklearn.model_selection import train_test_split, GridSearchCV
+
+from sklearn.metrics import (
+    classification_report, accuracy_score, 
+    r2_score, mean_squared_error, mean_absolute_error, 
+    mean_absolute_percentage_error, silhouette_score
+)
+
+from sklearn.cluster import KMeans
+
+%matplotlib inline
+
+
+df = pd.read_csv(io.BytesIO(uploaded['employee.csv']))
+
+if 'Unnamed: 0' in df.columns:
+    df.drop('Unnamed: 0', axis=1, inplace=True)
+
+pd.set_option('display.max_columns', None)
+pd.set_option('display.width', 1000)
+
+print("5 Baris pertama dari dataset:")
+display(df.head())
+print(df.shape)
+
+cols_to_drop = ['EmployeeNumber', 'EmployeeCount', 'Over18', 'StandardHours']
+df.drop(columns=[col for col in cols_to_drop if col in df.columns], inplace=True)
+
+print("\nShape data setelah drop kolom yang tidak diperlukan:", df.shape)
+
+# Identifikasi kolom numerik
+numeric_cols = df.select_dtypes(include=[np.number]).columns.tolist()
+print("\nKolom Numerik:", numeric_cols)
+
+for col in numeric_cols:
+    print("\n\n===== EDA Kolom Numerik: {} =====".format(col))
+    data = df[col].dropna()
+
+    # a. Histogram dan Boxplot
+    fig, axes = plt.subplots(1, 2, figsize=(14, 5))
+
+    # Histogram dengan KDE
+    sns.histplot(data, kde=True, ax=axes[0], color='skyblue')
+    axes[0].set_title(f'Histogram of {col}')
+    axes[0].set_xlabel(col)
+    axes[0].set_ylabel('Frequency')
+
+    # Boxplot
+    sns.boxplot(x=data, ax=axes[1], color='lightgreen')
+    axes[1].set_title(f'Boxplot of {col}')
+    plt.show()
+
+    # b. Metrik Statistik Dasar
+    mean_val = data.mean()
+    std_val = data.std()
+    min_val = data.min()
+    q1 = data.quantile(0.25)
+    q2 = data.quantile(0.5)  # median
+    q3 = data.quantile(0.75)
+    iqr = q3 - q1
+    max_val = data.max()
+
+    print("Statistik Dasar:")
+    print(f"Mean      : {mean_val:.2f}")
+    print(f"Std       : {std_val:.2f}")
+    print(f"Min       : {min_val:.2f}")
+    print(f"Q1        : {q1:.2f}")
+    print(f"Median(Q2): {q2:.2f}")
+    print(f"Q3        : {q3:.2f}")
+    print(f"IQR       : {iqr:.2f}")
+    print(f"Max       : {max_val:.2f}")
+
+    # c. Identifikasi nilai Lower Whisker dan Upper Whisker
+    lower_whisker = q1 - 1.5 * iqr
+    upper_whisker = q3 + 1.5 * iqr
+    print(f"Lower Whisker: {lower_whisker:.2f}")
+    print(f"Upper Whisker: {upper_whisker:.2f}")
+
+    # d. Deteksi Outlier (nilai < lower_whisker atau > upper_whisker)
+    outliers = data[(data < lower_whisker) | (data > upper_whisker)]
+    outlier_count = outliers.count()
+    total_count = data.count()
+    proportion = outlier_count / total_count
+
+    print("Analisis Outlier:")
+    print(f"Jumlah Outlier      : {outlier_count}")
+    print(f"Proporsi Outlier    : {proportion:.4f}")
+    print("List Nilai Outlier  :")
+    print(outliers.values)
+
+# Identifikasi kolom kategorikal
+categorical_cols = df.select_dtypes(include=['object']).columns.tolist()
+print("\nKolom Kategorikal:", categorical_cols)
+
+for col in categorical_cols:
+    print("\n\n===== EDA Kolom Kategorikal: {} =====".format(col))
+
+    # a. Countplot
+    plt.figure(figsize=(8, 4))
+    sns.countplot(data=df, x=col, palette="Set2")
+    plt.title(f'Countplot untuk {col}')
+    plt.xticks(rotation=45)
+    plt.xlabel(col)
+    plt.ylabel('Count')
+    plt.show()
+
+    # b. Daftar kategori unik dan frekuensi
+    freq = df[col].value_counts()
+    print("Frekuensi Kategori:")
+    print(freq)
+
+if 'Attrition' in df.columns:
+    for col in numeric_cols:
+        # a. Tampilkan boxplot
+        plt.figure(figsize=(8, 4))
+        sns.boxplot(x='Attrition', y=col, data=df, palette="Set3")
+        plt.title(f'Boxplot {col} vs Attrition')
+        plt.xlabel('Attrition')
+        plt.ylabel(col)
+        plt.show()
+
+        # b. Menghitung statistik ringkasan berdasarkan kelompok Attrition
+        group_stats = df.groupby('Attrition')[col].agg(['mean', 'median', 'std', 'min', 'max', 'count'])
+        print(f"\nSummary Statistics untuk {col} berdasarkan Attrition:")
+        print(group_stats)
+
+        # Menghitung Q1, Q3, dan IQR untuk masing-masing grup
+        quantiles = df.groupby('Attrition')[col].quantile([0.25, 0.75]).unstack(level=1)
+        quantiles.columns = ['Q1', 'Q3']
+        quantiles['IQR'] = quantiles['Q3'] - quantiles['Q1']
+        print(f"\nQuantiles (Q1, Q3) dan IQR untuk {col} berdasarkan Attrition:")
+        print(quantiles)
+
+if 'Attrition' in df.columns:
+    for col in categorical_cols:
+        if col != 'Attrition':
+            print("\n\n===== EDA Multivariat (Kategorikal) untuk: {} =====".format(col))
+
+            # a. Countplot dengan hue 'Attrition'
+            plt.figure(figsize=(8, 4))
+            sns.countplot(data=df, x=col, hue='Attrition', palette="Set1")
+            plt.title(f'Countplot {col} dengan Attrition sebagai Hue')
+            plt.xticks(rotation=45)
+            plt.xlabel(col)
+            plt.ylabel('Count')
+            plt.show()
+
+            # b. Stacked Barplot: Hitung proporsi nilai Attrition untuk tiap kategori
+            ctab = pd.crosstab(df[col], df['Attrition'])
+            ctab_norm = ctab.div(ctab.sum(axis=1), axis=0)
+            ctab_norm.plot(kind='bar', stacked=True, figsize=(8, 4), colormap='Paired')
+            plt.title(f'Stacked Barplot Proporsi Attrition untuk {col}')
+            plt.xlabel(col)
+            plt.ylabel('Proporsi')
+            plt.xticks(rotation=45)
+            plt.show()
+
+            # c. Kuantifikasi perbedaan proporsi antara Attrition 'Yes' dan 'No'
+            if 'Yes' in ctab_norm.columns and 'No' in ctab_norm.columns:
+                # Hitung selisih proporsi: nilai positif berarti proporsi 'Yes' lebih tinggi,
+                # sedangkan nilai negatif menunjukkan sebaliknya.
+                diff_prop = ctab_norm['Yes'] - ctab_norm['No']
+                print(f"Perbedaan proporsi Attrition ('Yes' - 'No') untuk {col}:")
+                print(diff_prop)
+
+                # Opsional: Menampilkan kategori dengan perbedaan tertinggi dan terendah
+                max_diff = diff_prop.max()
+                min_diff = diff_prop.min()
+                cat_max = diff_prop.idxmax()
+                cat_min = diff_prop.idxmin()
+                print(f"\nKategori dengan perbedaan tertinggi: {cat_max} ({max_diff:.2f})")
+                print(f"Kategori dengan perbedaan terendah: {cat_min} ({min_diff:.2f})")
+            else:
+                print("Tidak dapat menghitung perbedaan proporsi karena kolom 'Yes' atau 'No' tidak ditemukan.")
+
+else:
+    print("Kolom 'Attrition' tidak ditemukan dalam dataset!")
+
+alpha = 0.05
+
+# Pastikan kolom 'TotalWorkingYears' ada, sesuaikan nama kolom jika perlu (misalnya 'Total Working Years')
+if 'TotalWorkingYears' in df.columns:
+    # Pisahkan data berdasarkan Attrition
+    group_yes = df[df['Attrition'] == 'Yes']['TotalWorkingYears'].dropna()
+    group_no  = df[df['Attrition'] == 'No']['TotalWorkingYears'].dropna()
+
+    # Lakukan uji t independen (menggunakan Welch’s t-test dengan equal_var=False)
+    # Call the ttest_ind function using stats.ttest_ind
+    t_stat, p_value = stats.ttest_ind(group_yes, group_no, equal_var=False)
+
+    print("\n===== Hasil Uji T Independen =====")
+    print(f"t-statistic: {t_stat:.4f}")
+    print(f"p-value    : {p_value:.4f}")
+
+    # Kesimpulan pengujian hipotesis
+    if p_value < alpha:
+        print("Kesimpulan: Tolak H0. Terdapat perbedaan signifikan mean 'Total Working Years' antara karyawan yang keluar dan menetap.")
+    else:
+        print("Kesimpulan: Gagal menolak H0. Tidak terdapat perbedaan signifikan mean 'Total Working Years' antara karyawan yang keluar dan menetap.")
+else:
+    print("Kolom 'TotalWorkingYears' tidak ditemukan dalam dataset!")
+
+alpha = 0.05  # tingkat signifikansi
+
+if 'Department' in df.columns and 'Age' in df.columns:
+    # Kelompokkan data berdasarkan 'Department' dan ambil daftar nilai 'Age' untuk setiap kelompok
+    department_groups = df.groupby('Department')['Age'].apply(list)
+
+    # Cek apakah terdapat tepat 3 departemen
+    if len(department_groups) == 3:
+        # Lakukan one-way ANOVA menggunakan fungsi f_oneway dari scipy.stats
+        f_stat, p_value = stats.f_oneway(
+            department_groups.iloc[0],
+            department_groups.iloc[1],
+            department_groups.iloc[2]
+        )
+
+        print("===== Hasil One-Way ANOVA =====")
+        print(f"F-statistic: {f_stat:.4f}")
+        print(f"p-value    : {p_value:.4f}")
+
+        # Interpretasi hasil pengujian
+        if p_value < alpha:
+            print("Kesimpulan: Tolak H0. Terdapat perbedaan signifikan mean 'Age' antara karyawan dari setidaknya 2 departemen.")
+        else:
+            print("Kesimpulan: Gagal menolak H0. Tidak terdapat perbedaan signifikan mean 'Age' antara karyawan dari departemen yang ada.")
+    else:
+        print("Dataset tidak memiliki tepat 3 departemen. Jumlah departemen yang ditemukan:", len(department_groups))
+else:
+    print("Kolom 'Department' atau 'Age' tidak ditemukan dalam dataset.")
+
+X = df.drop('Attrition', axis=1)
+y = df['Attrition']
+
+numeric_features = X_train.select_dtypes(include=['int64', 'float64']).columns.tolist()
+categorical_features = X_train.select_dtypes(include=['object']).columns.tolist()
+
+numeric_transformer = Pipeline(steps=[
+    ('imputer', SimpleImputer(strategy='mean')),
+    ('scaler', StandardScaler())
+])
+
+categorical_transformer = Pipeline(steps=[
+    ('imputer', SimpleImputer(strategy='most_frequent')),
+    ('onehot', OneHotEncoder(handle_unknown='ignore'))
+])
+
+preprocessor = ColumnTransformer(transformers=[
+    ('num', numeric_transformer, numeric_features),
+    ('cat', categorical_transformer, categorical_features)
+])
+
+y_train = y_train.map({'No': 0, 'Yes': 1})
+
+pipe_lr = Pipeline(steps=[
+    ('preprocessor', preprocessor),
+    ('classifier', LogisticRegression(max_iter=1000, random_state=42))
+])
+param_grid_lr = {
+    'classifier__C': [0.1, 1, 10]
+}
+
+pipe_dt = Pipeline(steps=[
+    ('preprocessor', preprocessor),
+    ('classifier', DecisionTreeClassifier(random_state=42))
+])
+param_grid_dt = {
+    'classifier__max_depth': [None, 3, 5, 7],
+    'classifier__min_samples_split': [2, 5, 10]
+}
+
+pipe_xgb = Pipeline(steps=[
+    ('preprocessor', preprocessor),
+    ('classifier', XGBClassifier(use_label_encoder=False, eval_metric='logloss', random_state=42))
+])
+param_grid_xgb = {
+    'classifier__n_estimators': [50, 100, 200],
+    'classifier__max_depth': [3, 5, 7],
+    'classifier__learning_rate': [0.01, 0.1, 0.2]
+}
+
+cv = 5
+
+# Tuning Logistic Regression
+print("Tuning Logistic Regression...")
+grid_lr = GridSearchCV(pipe_lr, param_grid_lr, cv=cv, scoring='accuracy', n_jobs=-1)
+grid_lr.fit(X_train, y_train)
+print("Best parameters for Logistic Regression:", grid_lr.best_params_)
+
+# Tuning Decision Tree Classifier
+print("\nTuning Decision Tree Classifier...")
+grid_dt = GridSearchCV(pipe_dt, param_grid_dt, cv=cv, scoring='accuracy', n_jobs=-1)
+grid_dt.fit(X_train, y_train)
+print("Best parameters for Decision Tree:", grid_dt.best_params_)
+
+# Tuning XGBoost Classifier
+print("\nTuning XGBoost Classifier...")
+grid_xgb = GridSearchCV(pipe_xgb, param_grid_xgb, cv=cv, scoring='accuracy', n_jobs=-1)
+grid_xgb.fit(X_train, y_train)
+print("Best parameters for XGBoost:", grid_xgb.best_params_)
+
+#--------------------------------------------------------------------------------
+# ERROR
+#--------------------------------------------------------------------------------
+
+# --- Patch untuk XGBClassifier agar memiliki __sklearn_tags__ ---
+# Cek apakah XGBClassifier sudah memiliki __sklearn_tags__
+if not hasattr(XGBClassifier, '__sklearn_tags__'):
+    # Patch dengan memanfaatkan method _get_tags() yang sudah ada di XGBClassifier
+    XGBClassifier.__sklearn_tags__ = property(lambda self: self._get_tags())
+
+# Ambil best estimator dari masing-masing grid search
+best_lr = grid_lr.best_estimator_
+best_dt = grid_dt.best_estimator_
+best_xgb = grid_xgb.best_estimator_
+
+# Prediksi pada train set
+y_train_pred_lr = best_lr.predict(X_train)
+y_train_pred_dt = best_dt.predict(X_train)
+y_train_pred_xgb = best_xgb.predict(X_train)
+
+# Prediksi pada test set
+y_test_pred_lr = best_lr.predict(X_test)
+y_test_pred_dt = best_dt.predict(X_test)
+y_test_pred_xgb = best_xgb.predict(X_test)
+
+print("\n=== Logistic Regression Classification Report ===")
+print("Train Set:")
+print(classification_report(y_train, y_train_pred_lr))
+print("Test Set:")
+print(classification_report(y_test, y_test_pred_lr))
+
+print("\n=== Decision Tree Classification Report ===")
+print("Train Set:")
+print(classification_report(y_train, y_train_pred_dt))
+print("Test Set:")
+print(classification_report(y_test, y_test_pred_dt))
+
+print("\n=== XGBoost Classification Report ===")
+print("Train Set:")
+print(classification_report(y_train, y_train_pred_xgb))
+print("Test Set:")
+print(classification_report(y_test, y_test_pred_xgb))
+
+# The patch is applied again here to make sure the attribute is available after fitting and predicting
+if not hasattr(XGBClassifier, '__sklearn_tags__'):
+    XGBClassifier.__sklearn_tags__ = property(lambda self: self._get_tags())
+
+acc_lr = accuracy_score(y_test, y_test_pred_lr)
+acc_dt = accuracy_score(y_test, y_test_pred_dt)
+acc_xgb = accuracy_score(y_test, y_test_pred_xgb)
+
+print("\n=== Test Set Accuracy ===")
+print(f"Logistic Regression: {acc_lr:.4f}")
+print(f"Decision Tree      : {acc_dt:.4f}")
+print(f"XGBoost            : {acc_xgb:.4f}")
+
+# Menentukan model dengan akurasi tertinggi
+best_model = None
+best_score = max(acc_lr, acc_dt, acc_xgb)
+if best_score == acc_lr:
+    best_model = "Logistic Regression"
+elif best_score == acc_dt:
+    best_model = "Decision Tree"
+else:
+    best_model = "XGBoost"
+
+print(f"\nEstimator terbaik berdasarkan performansi test set adalah: {best_model} dengan akurasi {best_score:.4f}")
+
+X_reg = df.drop('MonthlyIncome', axis=1)
+y_reg = df['MonthlyIncome']
+
+X_reg_train, X_reg_test, y_reg_train, y_reg_test = train_test_split(
+    X_reg, y_reg, test_size=0.2, random_state=42
+)
+
+numeric_features_reg = X_reg_train.select_dtypes(include=['int64', 'float64']).columns.tolist()
+categorical_features_reg = X_reg_train.select_dtypes(include=['object']).columns.tolist()
+
+numeric_transformer_reg = Pipeline(steps=[
+    ('imputer', SimpleImputer(strategy='mean')),
+    ('scaler', StandardScaler())
+])
+categorical_transformer_reg = Pipeline(steps=[
+    ('imputer', SimpleImputer(strategy='most_frequent')),
+    ('onehot', OneHotEncoder(handle_unknown='ignore'))
+])
+preprocessor_reg = ColumnTransformer(transformers=[
+    ('num', numeric_transformer_reg, numeric_features_reg),
+    ('cat', categorical_transformer_reg, categorical_features_reg)
+])
+
+pipe_poly = Pipeline(steps=[
+    ('preprocessor', preprocessor_reg),
+    ('poly', PolynomialFeatures()),
+    ('regressor', LinearRegression())
+])
+param_grid_poly = {
+    'poly__degree': [1, 2, 3]  # degree 1 sama dengan linear regression biasa
+}
+
+pipe_xgb_reg = Pipeline(steps=[
+    ('preprocessor', preprocessor_reg),
+    ('regressor', XGBRegressor(random_state=42, objective='reg:squarederror'))
+])
+param_grid_xgb_reg = {
+    'regressor__n_estimators': [50, 100, 200],
+    'regressor__max_depth': [3, 5, 7],
+    'regressor__learning_rate': [0.01, 0.1, 0.2]
+}
+
+cv = 5
+
+print("Tuning Polynomial Regression...")
+grid_poly = GridSearchCV(pipe_poly, param_grid_poly, cv=cv, scoring='r2', n_jobs=-1)
+grid_poly.fit(X_reg_train, y_reg_train)
+print("Best parameters for Polynomial Regression:", grid_poly.best_params_)
+
+print("\nTuning XGBoost Regressor...")
+grid_xgb_reg = GridSearchCV(pipe_xgb_reg, param_grid_xgb_reg, cv=cv, scoring='r2', n_jobs=-1)
+grid_xgb_reg.fit(X_reg_train, y_reg_train)
+print("Best parameters for XGBoost Regressor:", grid_xgb_reg.best_params_)
+
+#--------------------------------------------------------------------------------
+# ERROR
+#--------------------------------------------------------------------------------
+
+def evaluate_model(model, X_train, y_train, X_test, y_test):
+    results = {}
+    # Prediksi pada train dan test
+    y_train_pred = model.predict(X_train)
+    y_test_pred = model.predict(X_test)
+
+    # Metode evaluasi untuk data train
+    results['Train_r2'] = r2_score(y_train, y_train_pred)
+    mse_train = mean_squared_error(y_train, y_train_pred)
+    results['Train_mse'] = mse_train
+    results['Train_rmse'] = np.sqrt(mse_train)
+    results['Train_mae'] = mean_absolute_error(y_train, y_train_pred)
+    results['Train_mape'] = mean_absolute_percentage_error(y_train, y_train_pred)
+
+    # Metode evaluasi untuk data test
+    results['Test_r2'] = r2_score(y_test, y_test_pred)
+    mse_test = mean_squared_error(y_test, y_test_pred)
+    results['Test_mse'] = mse_test
+    results['Test_rmse'] = np.sqrt(mse_test)
+    results['Test_mae'] = mean_absolute_error(y_test, y_test_pred)
+    results['Test_mape'] = mean_absolute_percentage_error(y_test, y_test_pred)
+
+    return results
+
+metrics_poly = evaluate_model(grid_poly.best_estimator_, X_reg_train, y_reg_train, X_reg_test, y_reg_test)
+metrics_xgb_reg = evaluate_model(grid_xgb_reg.best_estimator_, X_reg_train, y_reg_train, X_reg_test, y_reg_test)
+
+metrics_df = pd.DataFrame({
+    'Polynomial Regression': metrics_poly,
+    'XGBoost Regressor': metrics_xgb_reg
+})
+
+print("\n=== Regression Metrics (Train vs Test) ===")
+print(metrics_df)
+
+if metrics_poly['Test_r2'] > metrics_xgb_reg['Test_r2']:
+    better_model = "Polynomial Regression"
+else:
+    better_model = "XGBoost Regressor"
+print(f"\nModel dengan performa terbaik: {better_model}")
+
+X_cluster = df.drop(['Attrition', 'MonthlyIncome'], axis=1)
+
+numeric_features_cluster = X_cluster.select_dtypes(include=['int64', 'float64']).columns.tolist()
+categorical_features_cluster = X_cluster.select_dtypes(include=['object']).columns.tolist()
+
+numeric_transformer_cluster = Pipeline(steps=[
+    ('imputer', SimpleImputer(strategy='mean')),
+    ('scaler', StandardScaler())
+])
+categorical_transformer_cluster = Pipeline(steps=[
+    ('imputer', SimpleImputer(strategy='most_frequent')),
+    ('onehot', OneHotEncoder(handle_unknown='ignore'))
+])
+preprocessor_cluster = ColumnTransformer(transformers=[
+    ('num', numeric_transformer_cluster, numeric_features_cluster),
+    ('cat', categorical_transformer_cluster, categorical_features_cluster)
+])
+
+X_cluster_transformed = preprocessor_cluster.fit_transform(X_cluster)
+
+inertias = []
+sil_scores = []
+K_range = range(2, 11)  # mencoba nilai k dari 2 sampai 10
+
+print("\nEvaluasi k untuk KMeans clustering:")
+for k in K_range:
+    kmeans = KMeans(n_clusters=k, random_state=42)
+    cluster_labels = kmeans.fit_predict(X_cluster_transformed)
+    inertias.append(kmeans.inertia_)
+    sil = silhouette_score(X_cluster_transformed, cluster_labels)
+    sil_scores.append(sil)
+    print(f"k = {k}: Inertia = {kmeans.inertia_:.2f}, Silhouette Score = {sil:.4f}")
+
+plt.figure(figsize=(12,5))
+plt.subplot(1,2,1)
+plt.plot(K_range, inertias, marker='o')
+plt.title('Elbow Method')
+plt.xlabel('Number of clusters (k)')
+plt.ylabel('Inertia')
+
+plt.subplot(1,2,2)
+plt.plot(K_range, sil_scores, marker='o', color='green')
+plt.title('Silhouette Score')
+plt.xlabel('Number of clusters (k)')
+plt.ylabel('Silhouette Score')
+plt.tight_layout()
+plt.show()
+
+optimal_k = K_range[sil_scores.index(max(sil_scores))]
+print(f"\nOptimal number of clusters berdasarkan Silhouette Score: {optimal_k}")
+
+final_kmeans = KMeans(n_clusters=optimal_k, random_state=42)
+cluster_labels_final = final_kmeans.fit_predict(X_cluster_transformed)
+df['label'] = cluster_labels_final
+
+print("\nContoh 5 baris data dengan kolom cluster 'label':")
+print(df[['label']].head())
